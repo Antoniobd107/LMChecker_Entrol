@@ -6,7 +6,7 @@ Misma logica que las versiones anteriores (lm_reglas.py, sin cambios), pero
 con una interfaz nativa hecha con PyQt6 y la libreria PyQt6-Fluent-Widgets
 (aspecto "Fluent Design" de Windows 11: tarjetas, colores de marca, controles
 redondeados) - SIN depender de WebView2 ni de ningun navegador embebido, por
-problemas de estabilidad que tuve con esa version.
+los problemas de estabilidad que tuvimos con esa version.
 
 Las actualizaciones desde hilos en segundo plano (cargar catalogo, analizar)
 se hacen con señales de Qt (pyqtSignal/pyqtSlot), el mecanismo nativo y
@@ -50,7 +50,7 @@ from qfluentwidgets import (
 from lm_reglas import (
     cargar_catalogo, extraer_tabla_odt, analizar_lm,
     aplicar_reglas_especiales, generar_excel,
-    extraer_cabecera_modelo, analizar_referencias_modelo,
+    extraer_cabecera_modelo, analizar_referencias_modelo, analizar_plates,
 )
 
 # ============================================================
@@ -221,10 +221,12 @@ class VentanaPrincipal(QWidget):
         self.chk_flir = CheckBox("Lleva FLIR handheld")
         self.chk_1000x = CheckBox("Es simulador 1000x")
         self.chk_referencias = CheckBox("Verificar últimas referencias")
+        self.chk_plates = CheckBox("PLATES")
         vc.addWidget(self.chk_debriefing)
         vc.addWidget(self.chk_flir)
         vc.addWidget(self.chk_1000x)
         vc.addWidget(self.chk_referencias)
+        vc.addWidget(self.chk_plates)
         layout.addWidget(tarjeta_cfg)
 
         # Boton analizar + progreso
@@ -345,6 +347,7 @@ class VentanaPrincipal(QWidget):
             'flir': self.chk_flir.isChecked(),
             'sim_1000x': self.chk_1000x.isChecked(),
             'verificar_referencias': self.chk_referencias.isChecked(),
+            'verificar_plates': self.chk_plates.isChecked(),
         }
         threading.Thread(target=self._trabajo_analizar, args=(checkboxes,), daemon=True).start()
 
@@ -364,6 +367,10 @@ class VentanaPrincipal(QWidget):
                 cabecera = extraer_cabecera_modelo(self.ruta_lm)
                 tabla_referencias = analizar_referencias_modelo(df_lm, cabecera['modelo'], cabecera['declarado'])
 
+            tabla_plates = None
+            if checkboxes.get('verificar_plates'):
+                tabla_plates = analizar_plates(df_lm)
+
             df_avisos = pd.DataFrame(avisos_generales)
             df_todas = (pd.concat([df_incidencias_fila, df_avisos], ignore_index=True)
                         if not df_avisos.empty else df_incidencias_fila)
@@ -374,7 +381,7 @@ class VentanaPrincipal(QWidget):
             ruta_xlsx = self.carpeta_salida / f"Informe_{base}_{ts}.xlsx"
             ruta_csv = self.carpeta_salida / f"Informe_{base}_{ts}.csv"
 
-            generar_excel(df_resultado, str(ruta_xlsx), avisos_generales, tabla_referencias)
+            generar_excel(df_resultado, str(ruta_xlsx), avisos_generales, tabla_referencias, tabla_plates)
             df_todas.to_csv(str(ruta_csv), index=False, encoding="utf-8-sig")
 
             conteo_fila = {}
@@ -388,6 +395,7 @@ class VentanaPrincipal(QWidget):
                 'total_fila': len(df_incidencias_fila),
                 'avisos': avisos_generales,
                 'tabla_referencias': tabla_referencias,
+                'tabla_plates': tabla_plates,
                 'ruta_xlsx': str(ruta_xlsx),
                 'ruta_csv': str(ruta_csv),
                 'carpeta': str(self.carpeta_salida),
@@ -434,6 +442,14 @@ class VentanaPrincipal(QWidget):
                 lineas.append(base_txt)
                 if fila_ref['Aviso']:
                     lineas.append(f"      ⚠ {fila_ref['Aviso']}")
+
+        if r.get('tabla_plates') is not None:
+            tabla_plt = r['tabla_plates']
+            mal = [f for f in tabla_plt if f['Aviso']]
+            lineas.append("")
+            lineas.append(f"Plates encontradas: {len(tabla_plt)} (fuera de Gr 6: {len(mal)})")
+            for f in mal:
+                lineas.append(f"  ⚠ Fila {f['Fila']} | {f['Referencia PLT']} | {f['Description']}: {f['Aviso']} (Gr actual={f['Gr']})")
 
         self.txt_resultado.setPlainText("\n".join(lineas))
         self.ruta_xlsx = r['ruta_xlsx']

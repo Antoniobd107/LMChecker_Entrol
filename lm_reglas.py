@@ -662,6 +662,43 @@ def analizar_referencias_modelo(df_lm: pd.DataFrame, modelo_actual: str, declara
 
 
 # ============================================================
+# Verificacion de Plates (PLT) - checkbox "PLATES"
+# ============================================================
+
+# Detecta "PLT" en cualquier parte de la celda PN, con o sin texto delante o
+# detras en la misma celda (ej. "PTE OT STD  PLT.H02.14"), y captura la
+# referencia completa en formato PLT[.segmento]* a partir de ahi.
+PATRON_PLT = re.compile(r'PLT(?:\.[A-Za-z0-9]+)*', re.I)
+GRUPO_PLATES_ESPERADO = '6'
+
+def analizar_plates(df_lm: pd.DataFrame) -> list:
+    """Busca en la columna PN cualquier referencia que contenga PLT (puede
+    llevar texto delante o detras en la misma celda, ej. 'PTE OT STD PLT.H02.14').
+    Devuelve una fila por cada material PLT encontrado, indicando si su grupo
+    no es el 6 (esperado para plates)."""
+    filas = []
+    for i, fila in df_lm.iterrows():
+        pn_raw = str(fila['PN'])
+        m = PATRON_PLT.search(pn_raw)
+        if not m:
+            continue
+        referencia_plt = m.group().upper()
+        gr_actual = str(fila['Gr']).strip()
+        correcto = gr_actual.upper() == GRUPO_PLATES_ESPERADO
+        filas.append({
+            'Fila': i + 4,
+            'Description': fila['Description'],
+            'PN': fila['PN'],
+            'Referencia PLT': referencia_plt,
+            'Qty': fila['Qty'],
+            'Gr': fila['Gr'],
+            'Correcto': correcto,
+            'Aviso': '' if correcto else 'PLT NO PERTENCE A GR 6',
+        })
+    return filas
+
+
+# ============================================================
 # Salida
 # ============================================================
 
@@ -699,7 +736,7 @@ def _fusionar_avisos_en_filas(df_lm: pd.DataFrame, avisos_generales):
         df.at[idx, 'Detalle'] = f"{detalle_actual}; {nuevo_detalle}" if detalle_actual else nuevo_detalle
     return df
 
-def generar_excel(df_lm: pd.DataFrame, ruta_xlsx: str, avisos_generales=None, tabla_referencias=None):
+def generar_excel(df_lm: pd.DataFrame, ruta_xlsx: str, avisos_generales=None, tabla_referencias=None, tabla_plates=None):
     df_lm = _fusionar_avisos_en_filas(df_lm, avisos_generales)
 
     wb = Workbook()
@@ -762,5 +799,24 @@ def generar_excel(df_lm: pd.DataFrame, ruta_xlsx: str, avisos_generales=None, ta
         anchos3 = [10, 14, 16, 22, 22, 22, 80]
         for i, w in enumerate(anchos3, start=1):
             ws3.column_dimensions[get_column_letter(i)].width = w
+
+    # Hoja aparte con todos los materiales PLT (Plates), solo si se ha pedido
+    # (checkbox "PLATES"). Se marcan en rojo los que no son de grupo 6.
+    if tabla_plates:
+        ws4 = wb.create_sheet("Plates")
+        cols4 = ['Fila', 'Description', 'PN', 'Referencia PLT', 'Qty', 'Gr', 'Aviso']
+        ws4.append(cols4)
+        for c in range(1, len(cols4) + 1):
+            ws4.cell(row=1, column=c).font = Font(bold=True)
+        fill_rojo = PatternFill('solid', start_color=COLORES_HEX['OBSOLETO'], end_color=COLORES_HEX['OBSOLETO'])
+        for fila_plt in tabla_plates:
+            ws4.append([fila_plt['Fila'], fila_plt['Description'], fila_plt['PN'],
+                        fila_plt['Referencia PLT'], fila_plt['Qty'], fila_plt['Gr'], fila_plt['Aviso']])
+            if fila_plt['Aviso']:
+                for c in range(1, len(cols4) + 1):
+                    ws4.cell(row=ws4.max_row, column=c).fill = fill_rojo
+        anchos4 = [8, 40, 22, 18, 8, 8, 30]
+        for i, w in enumerate(anchos4, start=1):
+            ws4.column_dimensions[get_column_letter(i)].width = w
 
     wb.save(ruta_xlsx)
