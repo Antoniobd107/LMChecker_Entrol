@@ -79,6 +79,9 @@ BULK_1000X_REFS = ['EN-3020', 'EN-3022', 'EN-3038', 'EN-3025', 'EN-0496', 'EN-10
 
 REF_USA_ADAPTADOR = 'EN-2641'
 
+GRUPO_3D_ENTROL = '10'  # Si Notes contiene "3D" (en cualquier parte), el material debe ser de este grupo
+PATRON_3D_ENTROL = re.compile(r'\b3D\b', re.I)
+
 # ============================================================
 # Catalogo master (.ods)
 # ============================================================
@@ -439,7 +442,13 @@ def aplicar_reglas_especiales(df_lm: pd.DataFrame, checkboxes: dict):
     avisos = []
 
     def agregar(fila_num, tipo, detalle):
-        avisos.append({'Fila': fila_num, 'Description': '', 'PN': '', 'Qty': '',
+        desc = pn = qty = gr = ''
+        if fila_num != 'General':
+            idx = fila_num - 4  # mismo desplazamiento usado al generar 'Fila' (i + 4)
+            if idx in df_lm.index:
+                fila_real = df_lm.loc[idx]
+                desc, pn, qty, gr = fila_real['Description'], fila_real['PN'], fila_real['Qty'], fila_real['Gr']
+        avisos.append({'Fila': fila_num, 'Description': desc, 'PN': pn, 'Qty': qty, 'Gr': gr,
                         'Tipo': tipo, 'Detalle': detalle})
 
     # --- pb lum -> EN-4408 (tapita), 1 unidad por cada unidad de pb lum ---
@@ -520,6 +529,15 @@ def aplicar_reglas_especiales(df_lm: pd.DataFrame, checkboxes: dict):
                     agregar('General', f'Revisar Gr de {ref} (Simulador 1000x)',
                              f"{ref}: Gr actual='{f['Gr']}', debería ser 'BULK' por ser simulador 1000x.")
 
+    # --- Notes contiene "3D Entrol" -> el grupo debe ser 10 (sin checkbox, siempre se comprueba) ---
+    for i, fila in df_lm.iterrows():
+        notes = str(fila.get('Notes', ''))
+        if PATRON_3D_ENTROL.search(notes):
+            gr_actual = str(fila['Gr']).strip()
+            if gr_actual.upper() != GRUPO_3D_ENTROL:
+                agregar(i + 4, 'Revisar Gr (3D Entrol)',
+                        f"Notes indica '3D Entrol': Gr actual='{fila['Gr']}', debería ser '{GRUPO_3D_ENTROL}'.")
+
     # --- Checkbox: USA -> EN-2641 requerido + aviso por tensiones 230V ---
     if checkboxes.get('pais') == 'USA':
         if not _existe_pn(df_lm, REF_USA_ADAPTADOR):
@@ -546,7 +564,36 @@ COLORES_HEX = {
     'REVISAR': 'D9E1F2',
 }
 
+ORDEN_PRIORIDAD = ['', 'OK', 'REVISAR', 'HUECO', 'NO_ENCONTRADO', 'OBSOLETO']
+
+def _fusionar_avisos_en_filas(df_lm: pd.DataFrame, avisos_generales):
+    """Combina los avisos atados a una fila concreta (los que generan
+    aplicar_reglas_especiales con Fila != 'General') en las columnas
+    Estado/Detalle de esa misma fila, para que se vean resaltados junto al
+    material al que pertenecen en la hoja principal, en vez de solo en una
+    lista aparte sin contexto."""
+    df = df_lm.copy()
+    for av in avisos_generales or []:
+        fila_num = av.get('Fila')
+        if fila_num == 'General' or fila_num is None:
+            continue
+        idx = fila_num - 4
+        if idx not in df.index:
+            continue
+        nuevo_estado = prioridad_estado([av['Tipo']])
+        estado_actual = df.at[idx, 'Estado'] or ''
+        rango_actual = ORDEN_PRIORIDAD.index(estado_actual) if estado_actual in ORDEN_PRIORIDAD else 1
+        rango_nuevo = ORDEN_PRIORIDAD.index(nuevo_estado)
+        if rango_nuevo > rango_actual:
+            df.at[idx, 'Estado'] = nuevo_estado
+        detalle_actual = df.at[idx, 'Detalle'] or ''
+        nuevo_detalle = f"{av['Tipo']}: {av['Detalle']}"
+        df.at[idx, 'Detalle'] = f"{detalle_actual}; {nuevo_detalle}" if detalle_actual else nuevo_detalle
+    return df
+
 def generar_excel(df_lm: pd.DataFrame, ruta_xlsx: str, avisos_generales=None):
+    df_lm = _fusionar_avisos_en_filas(df_lm, avisos_generales)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "LM revisado"
@@ -570,18 +617,23 @@ def generar_excel(df_lm: pd.DataFrame, ruta_xlsx: str, avisos_generales=None):
     for i, w in enumerate(anchos, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    # Hoja aparte para avisos generales (no atados a una fila concreta del LM)
+    # Hoja aparte con TODOS los avisos de reglas especiales (tanto los atados
+    # a una fila como los generales), con Fila/Description/PN/Gr para poder
+    # localizar el material aunque no se haya mirado la hoja principal.
     if avisos_generales:
         ws2 = wb.create_sheet("Avisos generales")
-        ws2.append(['Tipo', 'Detalle'])
-        ws2.cell(row=1, column=1).font = Font(bold=True)
-        ws2.cell(row=1, column=2).font = Font(bold=True)
+        cols2 = ['Fila', 'Description', 'PN', 'Gr', 'Tipo', 'Detalle']
+        ws2.append(cols2)
+        for c in range(1, len(cols2) + 1):
+            ws2.cell(row=1, column=c).font = Font(bold=True)
         fill_aviso = PatternFill('solid', start_color=COLORES_HEX['REVISAR'], end_color=COLORES_HEX['REVISAR'])
         for av in avisos_generales:
-            ws2.append([av['Tipo'], av['Detalle']])
-            ws2.cell(row=ws2.max_row, column=1).fill = fill_aviso
-            ws2.cell(row=ws2.max_row, column=2).fill = fill_aviso
-        ws2.column_dimensions['A'].width = 35
-        ws2.column_dimensions['B'].width = 90
+            ws2.append([av.get('Fila', 'General'), av.get('Description', ''), av.get('PN', ''),
+                        av.get('Gr', ''), av['Tipo'], av['Detalle']])
+            for c in range(1, len(cols2) + 1):
+                ws2.cell(row=ws2.max_row, column=c).fill = fill_aviso
+        anchos2 = [8, 40, 18, 8, 30, 70]
+        for i, w in enumerate(anchos2, start=1):
+            ws2.column_dimensions[get_column_letter(i)].width = w
 
     wb.save(ruta_xlsx)
