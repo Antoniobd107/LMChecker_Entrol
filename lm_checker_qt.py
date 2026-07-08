@@ -6,7 +6,7 @@ Misma logica que las versiones anteriores (lm_reglas.py, sin cambios), pero
 con una interfaz nativa hecha con PyQt6 y la libreria PyQt6-Fluent-Widgets
 (aspecto "Fluent Design" de Windows 11: tarjetas, colores de marca, controles
 redondeados) - SIN depender de WebView2 ni de ningun navegador embebido, por
-los problemas de estabilidad que tuvimos con esa version.
+problemas de estabilidad que tuve con esa version.
 
 Las actualizaciones desde hilos en segundo plano (cargar catalogo, analizar)
 se hacen con señales de Qt (pyqtSignal/pyqtSlot), el mecanismo nativo y
@@ -35,7 +35,7 @@ from datetime import datetime
 import pandas as pd
 
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QUrl
-from PyQt6.QtGui import QPixmap, QDesktopServices
+from PyQt6.QtGui import QPixmap, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox,
 )
@@ -139,6 +139,9 @@ class VentanaPrincipal(QWidget):
 
     def _construir_ui(self):
         self.setWindowTitle(NOMBRE_APP)
+        ruta_icono = resource_path("logo_entrol.png")
+        if os.path.exists(ruta_icono):
+            self.setWindowIcon(QIcon(ruta_icono))
         self.resize(720, 820)
         self.setMinimumSize(620, 600)
 
@@ -458,6 +461,9 @@ class VentanaPrincipal(QWidget):
 
 def main():
     app = QApplication(sys.argv)
+    ruta_icono = resource_path("logo_entrol.png")
+    if os.path.exists(ruta_icono):
+        app.setWindowIcon(QIcon(ruta_icono))
     setTheme(Theme.LIGHT)
     setThemeColor(COLOR_MARCA)
     ventana = VentanaPrincipal()

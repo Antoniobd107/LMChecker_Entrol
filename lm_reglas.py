@@ -22,12 +22,12 @@ from openpyxl.utils import get_column_letter
 MAX_SALTOS = 25
 RE_SUBCOMPONENTE = re.compile(r'^EN-\d+-\d+$')
 HUECOS_DUROS = {'Falta P/N', 'Falta cantidad', 'Falta Gr', 'Falta nombre componente'}
-NOMBRE_HOJA_CATALOGO = "Data          "  # nombre exacto de la hoja del catalogo, con los espacios al final tal cual
+NOMBRE_HOJA_CATALOGO = "Data          "  # nombre exacto de la hoja del catalogo
 
 # ============================================================
 # REGLAS ESPECIALES DEL DEPARTAMENTO
 # Editar aqui si cambian las normas. No tocar el resto del fichero
-# salvo que sepas lo que haces.
+# 
 # ============================================================
 
 # A) Sustituciones fijas: esta lista manda SIEMPRE por encima del catalogo
@@ -67,7 +67,7 @@ EXTINTOR_REAL = ['EN-2841', 'EN-3005', 'EN-2362']
 EXTINTOR_3D = ['EN-4173', 'EN-4174', 'EN-4175']
 
 REF_IPAD_OBSOLETO = 'EN-2800'
-IPAD_NUEVO = ['EN-2800.2', 'EN-4430', 'EN-4464']  # ipad, funda, adaptador
+IPAD_NUEVO = ['EN-5558', 'EN-5559', 'EN-4464']  # ipad, funda, adaptador
 
 # D) Reglas con checkbox
 REF_DEBRIEFING_MESA = 'EN-4249'        # mesa de debriefing
