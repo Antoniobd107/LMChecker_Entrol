@@ -22,12 +22,12 @@ from openpyxl.utils import get_column_letter
 MAX_SALTOS = 25
 RE_SUBCOMPONENTE = re.compile(r'^EN-\d+-\d+$')
 HUECOS_DUROS = {'Falta P/N', 'Falta cantidad', 'Falta Gr', 'Falta nombre componente'}
-NOMBRE_HOJA_CATALOGO = "Data          "  # nombre exacto de la hoja del catalogo
+NOMBRE_HOJA_CATALOGO = "Data          "  # nombre exacto de la hoja del catalogo, con los espacios al final tal cual
 
 # ============================================================
 # REGLAS ESPECIALES DEL DEPARTAMENTO
 # Editar aqui si cambian las normas. No tocar el resto del fichero
-# 
+# salvo que sepas lo que haces.
 # ============================================================
 
 # A) Sustituciones fijas: esta lista manda SIEMPRE por encima del catalogo
@@ -67,7 +67,7 @@ EXTINTOR_REAL = ['EN-2841', 'EN-3005', 'EN-2362']
 EXTINTOR_3D = ['EN-4173', 'EN-4174', 'EN-4175']
 
 REF_IPAD_OBSOLETO = 'EN-2800'
-IPAD_NUEVO = ['EN-5558', 'EN-5559', 'EN-4464']  # ipad, funda, adaptador
+IPAD_NUEVO = ['EN-2800.2', 'EN-4430', 'EN-4464']  # ipad, funda, adaptador
 
 # D) Reglas con checkbox
 REF_DEBRIEFING_MESA = 'EN-4249'        # mesa de debriefing
@@ -80,7 +80,9 @@ BULK_1000X_REFS = ['EN-3020', 'EN-3022', 'EN-3038', 'EN-3025', 'EN-0496', 'EN-10
 REF_USA_ADAPTADOR = 'EN-2641'
 
 GRUPO_3D_ENTROL = '10'  # Si Notes contiene "3D" (en cualquier parte), el material debe ser de este grupo
-PATRON_3D_ENTROL = re.compile(r'\b3D\b', re.I)
+# Detecta "3D" aunque vaya pegado a texto (ej: "Entrol3D"), siempre que no
+# le siga un digito (para no capturar codigos tipo ABC3D123).
+PATRON_3D_ENTROL = re.compile(r'3D(?!\d)', re.I)
 
 # ============================================================
 # Catalogo master (.ods)
@@ -240,7 +242,17 @@ def rastrear_pn(pn_actual, catalogo, saltos=0, visitados=None):
             if m:
                 pns_nuevos += re.findall(r'EN[-.]\d+(?:\.\d+)?', m.group(1), re.I)
         if not pns_nuevos:
-            return rastrear_pn(aumentar_version(pn_actual), catalogo, saltos + 1, nuevos_visitados)
+            # La descripcion no indica ningun reemplazo explicito. Probamos
+            # UNA vez si la siguiente version ya existe en el catalogo (a
+            # veces el reemplazo no se nombra en el texto pero la siguiente
+            # version ya esta creada); si no existe, es un fin de vida sin
+            # reemplazo documentado - NO seguimos adivinando versiones (.3,
+            # .4, .5...) que no existen, porque eso es lo que hacia que se
+            # reportara como "no encontrado en el master" en vez de obsoleto.
+            siguiente = aumentar_version(pn_actual)
+            if siguiente in catalogo:
+                return rastrear_pn(siguiente, catalogo, saltos + 1, nuevos_visitados)
+            return [f"__OBSOLETO_SIN_REEMPLAZO__:{pn_actual}"]
         resultado = []
         for nuevo in pns_nuevos:
             nuevo = normalizar_pn(nuevo)
@@ -265,9 +277,15 @@ def estado_pn(pn, catalogo):
 
     if descripcion.upper().startswith("OBSOLETE"):
         finales = list(dict.fromkeys(rastrear_pn(pn_norm, catalogo)))
-        resueltos = [f for f in finales if not f.startswith("__SIN_RESOLVER__")]
+        resueltos = [f for f in finales if not f.startswith("__")]
         if resueltos:
             return "OBSOLETO", ", ".join(resueltos)
+        sin_reemplazo = [f for f in finales if f.startswith("__OBSOLETO_SIN_REEMPLAZO__")]
+        if sin_reemplazo:
+            terminal = sin_reemplazo[0].split(":", 1)[1]
+            if terminal == pn_norm:
+                return "OBSOLETO", "sin reemplazo conocido en el master"
+            return "OBSOLETO", f"sin reemplazo conocido en el master (la cadena termina en {terminal}, también obsoleto sin sucesor)"
         return "NO_ENCONTRADO", None
 
     return "OK", None
