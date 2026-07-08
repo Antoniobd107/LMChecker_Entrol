@@ -50,6 +50,7 @@ from qfluentwidgets import (
 from lm_reglas import (
     cargar_catalogo, extraer_tabla_odt, analizar_lm,
     aplicar_reglas_especiales, generar_excel,
+    extraer_cabecera_modelo, analizar_referencias_modelo,
 )
 
 # ============================================================
@@ -216,9 +217,11 @@ class VentanaPrincipal(QWidget):
         self.chk_debriefing = CheckBox("Lleva Debriefing")
         self.chk_flir = CheckBox("Lleva FLIR handheld")
         self.chk_1000x = CheckBox("Es simulador 1000x")
+        self.chk_referencias = CheckBox("Verificar últimas referencias")
         vc.addWidget(self.chk_debriefing)
         vc.addWidget(self.chk_flir)
         vc.addWidget(self.chk_1000x)
+        vc.addWidget(self.chk_referencias)
         layout.addWidget(tarjeta_cfg)
 
         # Boton analizar + progreso
@@ -338,6 +341,7 @@ class VentanaPrincipal(QWidget):
             'debriefing': self.chk_debriefing.isChecked(),
             'flir': self.chk_flir.isChecked(),
             'sim_1000x': self.chk_1000x.isChecked(),
+            'verificar_referencias': self.chk_referencias.isChecked(),
         }
         threading.Thread(target=self._trabajo_analizar, args=(checkboxes,), daemon=True).start()
 
@@ -352,6 +356,11 @@ class VentanaPrincipal(QWidget):
             df_resultado, df_incidencias_fila = analizar_lm(df_lm, self.catalogo, progreso_cb=progreso_cb)
             avisos_generales = aplicar_reglas_especiales(df_lm, checkboxes)
 
+            tabla_referencias = None
+            if checkboxes.get('verificar_referencias'):
+                cabecera = extraer_cabecera_modelo(self.ruta_lm)
+                tabla_referencias = analizar_referencias_modelo(df_lm, cabecera['modelo'], cabecera['declarado'])
+
             df_avisos = pd.DataFrame(avisos_generales)
             df_todas = (pd.concat([df_incidencias_fila, df_avisos], ignore_index=True)
                         if not df_avisos.empty else df_incidencias_fila)
@@ -362,7 +371,7 @@ class VentanaPrincipal(QWidget):
             ruta_xlsx = self.carpeta_salida / f"Informe_{base}_{ts}.xlsx"
             ruta_csv = self.carpeta_salida / f"Informe_{base}_{ts}.csv"
 
-            generar_excel(df_resultado, str(ruta_xlsx), avisos_generales)
+            generar_excel(df_resultado, str(ruta_xlsx), avisos_generales, tabla_referencias)
             df_todas.to_csv(str(ruta_csv), index=False, encoding="utf-8-sig")
 
             conteo_fila = {}
@@ -375,6 +384,7 @@ class VentanaPrincipal(QWidget):
                 'conteo_fila': conteo_fila,
                 'total_fila': len(df_incidencias_fila),
                 'avisos': avisos_generales,
+                'tabla_referencias': tabla_referencias,
                 'ruta_xlsx': str(ruta_xlsx),
                 'ruta_csv': str(ruta_csv),
                 'carpeta': str(self.carpeta_salida),
@@ -411,6 +421,16 @@ class VentanaPrincipal(QWidget):
                 lineas.append(f"  • {av['Tipo']}{fila_txt}: {av['Detalle']}")
         else:
             lineas.append("✓ Sin avisos de reglas especiales (con la configuración marcada).")
+
+        if r.get('tabla_referencias'):
+            lineas.append("")
+            lineas.append("Verificación de últimas referencias:")
+            for fila_ref in r['tabla_referencias']:
+                base_txt = (f"  • {fila_ref['Prefijo']}: cabecera={fila_ref['Cabecera indica']}, "
+                            f"máximo real={fila_ref['Máximo en este simulador']}")
+                lineas.append(base_txt)
+                if fila_ref['Aviso']:
+                    lineas.append(f"      ⚠ {fila_ref['Aviso']}")
 
         self.txt_resultado.setPlainText("\n".join(lineas))
         self.ruta_xlsx = r['ruta_xlsx']

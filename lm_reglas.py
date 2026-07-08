@@ -554,6 +554,96 @@ def aplicar_reglas_especiales(df_lm: pd.DataFrame, checkboxes: dict):
     return avisos
 
 # ============================================================
+# Verificacion de ultimas referencias (PLT, PNL, MCD, LEG, KNB, KEY)
+# Funcion opcional, activada por checkbox "Verificar últimas referencias"
+# ============================================================
+
+PREFIJOS_REFERENCIA = ['PLT', 'PNL', 'MCD', 'LEG', 'KNB', 'KEY']
+
+def extraer_cabecera_modelo(ruta_odt: str) -> dict:
+    """Lee de la cabecera de pagina del documento (styles.xml -> style:header)
+    el modelo de simulador (ej. 'H64' de 'PARTS CATALOG H64') y los valores
+    declarados para cada prefijo (ej. 'PLT72, PNL59, ...').
+    Devuelve {'modelo': 'H64', 'declarado': {'PLT': 72, 'PNL': 59, ...}}."""
+    NS_STYLE = 'urn:oasis:names:tc:opendocument:xmlns:style:1.0'
+    NS_TEXT = 'urn:oasis:names:tc:opendocument:xmlns:text:1.0'
+    T_HEADER = f"{{{NS_STYLE}}}header"
+    T_P = f"{{{NS_TEXT}}}p"
+
+    with zipfile.ZipFile(ruta_odt) as z:
+        styles_xml = z.read('styles.xml')
+    root = etree.fromstring(styles_xml)
+    header = root.find(f'.//{T_HEADER}')
+    if header is None:
+        return {'modelo': None, 'declarado': {}}
+
+    parrafos = header.findall(T_P)
+    texto = '\n'.join(''.join(p.itertext()) for p in parrafos)
+
+    m_modelo = re.search(r'PARTS CATALOG\s+([A-Z]{1,3}\d+)', texto, re.I)
+    modelo = m_modelo.group(1).upper() if m_modelo else None
+
+    declarado = {}
+    for prefijo in PREFIJOS_REFERENCIA:
+        m = re.search(re.escape(prefijo) + r'(\d+)', texto)
+        if m:
+            declarado[prefijo] = int(m.group(1))
+
+    return {'modelo': modelo, 'declarado': declarado}
+
+
+def analizar_referencias_modelo(df_lm: pd.DataFrame, modelo_actual: str, declarado: dict) -> list:
+    """Para cada prefijo (PLT, PNL, MCD, LEG, KNB, KEY) busca en la columna PN
+    referencias con formato PREFIJO.MODELO.NUMERO (el MODELO no puede ser
+    puramente numerico - eso descarta formatos invalidos tipo PNL.0263 o
+    PNL178.1 sin modelo). Calcula el numero mas alto encontrado, tanto en
+    general (cualquier modelo) como especificamente para el modelo actual,
+    y lo compara con lo que declara la cabecera."""
+    filas = []
+    for prefijo in PREFIJOS_REFERENCIA:
+        patron = re.compile(rf'^{prefijo}\.([A-Za-z]\w*)\.(\d+)(?:\.\d+)?$', re.I)
+        encontrados = []  # (modelo, numero)
+        for pn in df_lm['PN']:
+            m = patron.match(str(pn).strip())
+            if m:
+                encontrados.append((m.group(1).upper(), int(m.group(2))))
+
+        cabecera_dice = declarado.get(prefijo)
+        avisos_celda = []
+
+        if not encontrados:
+            max_actual = max_global = modelo_global = None
+            avisos_celda.append(f"No se encontró ninguna referencia {prefijo}.{modelo_actual}.NN en el LM.")
+        else:
+            modelo_global, max_global = max(encontrados, key=lambda x: x[1])
+            del_actual = [n for m_, n in encontrados if m_ == modelo_actual]
+            max_actual = max(del_actual) if del_actual else None
+
+            if max_actual is None:
+                avisos_celda.append(f"No se encontró ninguna referencia del modelo actual ({modelo_actual}); "
+                                     f"la más alta encontrada es {prefijo}.{modelo_global}.{max_global}, de otro simulador.")
+            elif modelo_global != modelo_actual:
+                avisos_celda.append(f"El número más alto encontrado es {max_global} pero pertenece a otro "
+                                     f"simulador ({modelo_global}); el más alto de este simulador "
+                                     f"({modelo_actual}) es {max_actual}.")
+
+            if cabecera_dice is not None and max_actual is not None and cabecera_dice != max_actual:
+                avisos_celda.append(f"La cabecera indica {cabecera_dice} pero el máximo real de este "
+                                     f"simulador es {max_actual}.")
+
+        filas.append({
+            'Prefijo': prefijo,
+            'Modelo actual': modelo_actual,
+            'Cabecera indica': cabecera_dice if cabecera_dice is not None else '',
+            'Máximo en este simulador': max_actual if max_actual is not None else '',
+            'Máximo global encontrado': max_global if max_global is not None else '',
+            'Modelo del máximo global': modelo_global if modelo_global is not None else '',
+            'Aviso': ' '.join(avisos_celda),
+        })
+    return filas
+
+
+# ============================================================
 # Salida
 # ============================================================
 
@@ -591,7 +681,7 @@ def _fusionar_avisos_en_filas(df_lm: pd.DataFrame, avisos_generales):
         df.at[idx, 'Detalle'] = f"{detalle_actual}; {nuevo_detalle}" if detalle_actual else nuevo_detalle
     return df
 
-def generar_excel(df_lm: pd.DataFrame, ruta_xlsx: str, avisos_generales=None):
+def generar_excel(df_lm: pd.DataFrame, ruta_xlsx: str, avisos_generales=None, tabla_referencias=None):
     df_lm = _fusionar_avisos_en_filas(df_lm, avisos_generales)
 
     wb = Workbook()
@@ -635,5 +725,24 @@ def generar_excel(df_lm: pd.DataFrame, ruta_xlsx: str, avisos_generales=None):
         anchos2 = [8, 40, 18, 8, 30, 70]
         for i, w in enumerate(anchos2, start=1):
             ws2.column_dimensions[get_column_letter(i)].width = w
+
+    # Hoja aparte con la verificacion de ultimas referencias (PLT/PNL/MCD/LEG/KNB/KEY),
+    # solo si se ha pedido (checkbox "Verificar últimas referencias")
+    if tabla_referencias:
+        ws3 = wb.create_sheet("Últimas referencias")
+        cols3 = ['Prefijo', 'Modelo actual', 'Cabecera indica', 'Máximo en este simulador',
+                 'Máximo global encontrado', 'Modelo del máximo global', 'Aviso']
+        ws3.append(cols3)
+        for c in range(1, len(cols3) + 1):
+            ws3.cell(row=1, column=c).font = Font(bold=True)
+        fill_aviso_ref = PatternFill('solid', start_color=COLORES_HEX['REVISAR'], end_color=COLORES_HEX['REVISAR'])
+        for fila_ref in tabla_referencias:
+            ws3.append([fila_ref[c] for c in cols3])
+            if fila_ref['Aviso']:
+                for c in range(1, len(cols3) + 1):
+                    ws3.cell(row=ws3.max_row, column=c).fill = fill_aviso_ref
+        anchos3 = [10, 14, 16, 22, 22, 22, 80]
+        for i, w in enumerate(anchos3, start=1):
+            ws3.column_dimensions[get_column_letter(i)].width = w
 
     wb.save(ruta_xlsx)
