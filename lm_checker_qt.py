@@ -38,6 +38,7 @@ from PyQt6.QtCore import Qt, QObject, pyqtSignal, QUrl
 from PyQt6.QtGui import QPixmap, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox,
+    QScrollArea, QFrame,
 )
 
 from qfluentwidgets import (
@@ -51,6 +52,7 @@ from lm_reglas import (
     cargar_catalogo, extraer_tabla_odt, analizar_lm,
     aplicar_reglas_especiales, generar_excel,
     extraer_cabecera_modelo, analizar_referencias_modelo, analizar_plates,
+    VISUAL_TIPO_A, VISUAL_TIPO_B, VISUAL_TIPO_OTRO,
 )
 
 # ============================================================
@@ -142,10 +144,27 @@ class VentanaPrincipal(QWidget):
         ruta_icono = resource_path("logo_entrol.png")
         if os.path.exists(ruta_icono):
             self.setWindowIcon(QIcon(ruta_icono))
-        self.resize(720, 820)
-        self.setMinimumSize(620, 600)
+        self.resize(780, 860)
+        self.setMinimumSize(680, 500)
 
-        layout = QVBoxLayout(self)
+        # Layout raiz de la ventana: solo contiene el scroll area. Todo el
+        # contenido real vive dentro de 'contenido' / 'layout'. Con esto, si
+        # la ventana se maximiza en un monitor muy ancho pero no muy alto (o
+        # se hace mas pequeña de lo que el contenido necesita), aparece una
+        # barra de scroll en vez de que los widgets se compriman y se
+        # solapen entre si (que es lo que pasaba antes).
+        layout_raiz = QVBoxLayout(self)
+        layout_raiz.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        layout_raiz.addWidget(scroll)
+
+        contenido = QWidget()
+        scroll.setWidget(contenido)
+
+        layout = QVBoxLayout(contenido)
         layout.setContentsMargins(20, 20, 20, 16)
         layout.setSpacing(14)
 
@@ -204,10 +223,18 @@ class VentanaPrincipal(QWidget):
         h2.addWidget(btn_carpeta)
         layout.addWidget(tarjeta_carpeta)
 
-        # Tarjeta: configuracion
+        # Tarjeta: configuracion (en dos columnas para aprovechar mejor el
+        # ancho y no depender de tanto espacio vertical apilado)
         tarjeta_cfg = CardWidget()
         vc = QVBoxLayout(tarjeta_cfg)
         vc.addWidget(StrongBodyLabel("Configuración de este simulador"))
+
+        columnas = QHBoxLayout()
+        columnas.setSpacing(28)
+        vc.addLayout(columnas)
+
+        # --- Columna izquierda: Destino + checkboxes ---
+        col_izq = QVBoxLayout()
         fila_pais = QHBoxLayout()
         fila_pais.addWidget(BodyLabel("Destino:"))
         self.radio_ue = RadioButton("Unión Europea")
@@ -216,17 +243,42 @@ class VentanaPrincipal(QWidget):
         fila_pais.addWidget(self.radio_ue)
         fila_pais.addWidget(self.radio_usa)
         fila_pais.addStretch()
-        vc.addLayout(fila_pais)
+        col_izq.addLayout(fila_pais)
         self.chk_debriefing = CheckBox("Lleva Debriefing")
         self.chk_flir = CheckBox("Lleva FLIR handheld")
         self.chk_1000x = CheckBox("Es simulador 1000x")
         self.chk_referencias = CheckBox("Verificar últimas referencias")
         self.chk_plates = CheckBox("PLATES")
-        vc.addWidget(self.chk_debriefing)
-        vc.addWidget(self.chk_flir)
-        vc.addWidget(self.chk_1000x)
-        vc.addWidget(self.chk_referencias)
-        vc.addWidget(self.chk_plates)
+        col_izq.addWidget(self.chk_debriefing)
+        col_izq.addWidget(self.chk_flir)
+        col_izq.addWidget(self.chk_1000x)
+        col_izq.addWidget(self.chk_referencias)
+        col_izq.addWidget(self.chk_plates)
+        col_izq.addStretch()
+        columnas.addLayout(col_izq, 1)
+
+        # --- Columna derecha: "Marca el visual" ---
+        # En su propio widget contenedor (frame_visual) para que Qt no mezcle
+        # estos radios con los de Destino (UE/USA) en el mismo grupo
+        # autoExclusive - los radios de un mismo parent widget son
+        # mutuamente excluyentes entre si en Qt.
+        col_der = QVBoxLayout()
+        col_der.addWidget(StrongBodyLabel("Marca el visual"))
+        frame_visual = QWidget()
+        visual_layout = QVBoxLayout(frame_visual)
+        visual_layout.setContentsMargins(0, 0, 0, 0)
+        visual_layout.setSpacing(6)
+        self.radio_vis_a = RadioButton("VIS.014.X / VIS.020.X")
+        self.radio_vis_b = RadioButton("VIS.030.X / VIS.031.X / VIS.032.X / VIS.033.X")
+        self.radio_vis_otro = RadioButton("Otro visual (LED)")
+        self.radio_vis_otro.setChecked(True)  # opcion por defecto, la mas comun
+        visual_layout.addWidget(self.radio_vis_a)
+        visual_layout.addWidget(self.radio_vis_b)
+        visual_layout.addWidget(self.radio_vis_otro)
+        col_der.addWidget(frame_visual)
+        col_der.addStretch()
+        columnas.addLayout(col_der, 1)
+
         layout.addWidget(tarjeta_cfg)
 
         # Boton analizar + progreso
@@ -341,6 +393,13 @@ class VentanaPrincipal(QWidget):
         self.txt_resultado.setPlainText("Analizando...")
         self.barra_progreso.setValue(0)
 
+        if self.radio_vis_a.isChecked():
+            visual_tipo = VISUAL_TIPO_A
+        elif self.radio_vis_b.isChecked():
+            visual_tipo = VISUAL_TIPO_B
+        else:
+            visual_tipo = VISUAL_TIPO_OTRO
+
         checkboxes = {
             'pais': 'USA' if self.radio_usa.isChecked() else 'UE',
             'debriefing': self.chk_debriefing.isChecked(),
@@ -348,6 +407,7 @@ class VentanaPrincipal(QWidget):
             'sim_1000x': self.chk_1000x.isChecked(),
             'verificar_referencias': self.chk_referencias.isChecked(),
             'verificar_plates': self.chk_plates.isChecked(),
+            'visual_tipo': visual_tipo,
         }
         threading.Thread(target=self._trabajo_analizar, args=(checkboxes,), daemon=True).start()
 

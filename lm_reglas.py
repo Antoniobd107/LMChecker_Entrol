@@ -80,6 +80,16 @@ BULK_1000X_REFS = ['EN-3020', 'EN-3022', 'EN-3038', 'EN-3025', 'EN-0496', 'EN-10
 REF_USA_ADAPTADOR = 'EN-2641'
 
 GRUPO_3D_ENTROL = '10'  # Si Notes contiene "3D" (en cualquier parte), el material debe ser de este grupo
+
+# Selección manual del tipo de visual (radio button, igual que Pais UE/USA).
+# No se detecta automaticamente a partir de las referencias del LM.
+VISUAL_TIPO_A = 'VIS_014_020'      # VIS.014.X / VIS.020.X -> debe llevar EN-3335
+VISUAL_TIPO_B = 'VIS_030_033'      # VIS.030.X.../VIS.033.X -> NO debe llevar EN-3335, debe llevar EN-5610
+VISUAL_TIPO_OTRO = 'OTRO'          # Otro visual (LED) -> no aplica ninguna comprobacion. Valor por defecto.
+REF_VISUAL_3335 = 'EN-3335'
+REF_VISUAL_5610 = 'EN-5610'
+TIPO_ERROR_VISUAL = f'Quitar {REF_VISUAL_3335} (visual VIS.030-033)'
+TIPO_ERROR_VISUAL_A = f'Quitar {REF_VISUAL_5610} (visual VIS.014-020)'
 # Detecta "3D" aunque vaya pegado a texto (ej: "Entrol3D"), siempre que no
 # le siga un digito (para no capturar codigos tipo ABC3D123).
 PATRON_3D_ENTROL = re.compile(r'3D(?!\d)', re.I)
@@ -351,6 +361,8 @@ def cantidad_int(valor):
         return None
 
 def prioridad_estado(tipos):
+    if any(t == TIPO_ERROR_VISUAL or t == TIPO_ERROR_VISUAL_A for t in tipos):      
+        return 'ERROR'
     if any(t.startswith('Obsoleto') for t in tipos):
         return 'OBSOLETO'
     if 'No encontrado en el master' in tipos:
@@ -569,6 +581,31 @@ def aplicar_reglas_especiales(df_lm: pd.DataFrame, checkboxes: dict):
                 agregar(i + 4, 'Revisar tensión (destino USA)',
                          f"Descripción menciona 230V con destino USA: '{desc.strip()}'. Confirmar si es correcto.")
 
+    # --- Tipo de visual (radio button VIS.014/020, VIS.030-033, u Otro) ---
+    visual_tipo = checkboxes.get('visual_tipo', VISUAL_TIPO_OTRO)
+
+    if visual_tipo == VISUAL_TIPO_A:
+        if _filas_con_pn(df_lm, [REF_VISUAL_3335]).empty:
+            agregar('General', f'Falta {REF_VISUAL_3335} (visual VIS.014/VIS.020)',
+                     f"Con visual VIS.014.X/VIS.020.X debe incluirse {REF_VISUAL_3335}.")
+        filas_5610 = _filas_con_pn(df_lm, [REF_VISUAL_5610])
+        for idx, _fila in filas_5610.iterrows():
+            agregar(idx + 4, TIPO_ERROR_VISUAL_A,
+                     f"Con visual VIS.014.X/VIS.020.X no debe llevar {REF_VISUAL_5610}; "
+                     f"debería llevar {REF_VISUAL_3335} en su lugar.")
+    
+    elif visual_tipo == VISUAL_TIPO_B:
+        filas_3335 = _filas_con_pn(df_lm, [REF_VISUAL_3335])
+        for idx, _fila in filas_3335.iterrows():
+            agregar(idx + 4, TIPO_ERROR_VISUAL,
+                     f"Con visual VIS.030.X-VIS.033.X no debe llevar {REF_VISUAL_3335}; "
+                     f"debería llevar {REF_VISUAL_5610} en su lugar.")
+        if _filas_con_pn(df_lm, [REF_VISUAL_5610]).empty:
+            agregar('General', f'Falta {REF_VISUAL_5610} (visual VIS.030-033)',
+                     f"Con visual VIS.030.X-VIS.033.X debe incluirse {REF_VISUAL_5610}.")
+
+    # visual_tipo == VISUAL_TIPO_OTRO (u otro valor no reconocido): sin comprobacion
+
     return avisos
 
 # ============================================================
@@ -707,9 +744,10 @@ COLORES_HEX = {
     'HUECO': 'FFEB9C',
     'NO_ENCONTRADO': 'FFD699',
     'REVISAR': 'D9E1F2',
+    'ERROR': 'FF8080'
 }
 
-ORDEN_PRIORIDAD = ['', 'OK', 'REVISAR', 'HUECO', 'NO_ENCONTRADO', 'OBSOLETO']
+ORDEN_PRIORIDAD = ['', 'OK', 'REVISAR', 'HUECO', 'NO_ENCONTRADO', 'OBSOLETO','ERROR']
 
 def _fusionar_avisos_en_filas(df_lm: pd.DataFrame, avisos_generales):
     """Combina los avisos atados a una fila concreta (los que generan
