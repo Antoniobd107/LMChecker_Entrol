@@ -57,6 +57,10 @@ CORRECCIONES_GRUPO = {
 PB_LUM = ['EN-3159', 'EN-3156', 'EN-3240', 'EN-3157', 'EN-3158', 'EN-3155']
 REF_TAPITA_PB = 'EN-4408'
 
+REFS_LICENCIA_BASE = ['EN-0504', 'EN-2001']  # por cada unidad combinada de estos dos, debe haber 1 EN-2642
+REF_LICENCIA_2642 = 'EN-2642'
+TIPO_ERROR_LICENCIA = f'Cantidad incorrecta de {REF_LICENCIA_2642}' # Hacemos marcar el error en el excel
+
 PCB_REQUIERE_CPU_ETH = ['PCB200.1', 'PCB129.1', 'PCB130.1', 'PCB009.1', 'EN-1902', 'PCB235.2', 'PCB080']
 REF_CPU_ETH = 'EN-2629'
 
@@ -361,7 +365,7 @@ def cantidad_int(valor):
         return None
 
 def prioridad_estado(tipos):
-    if any(t == TIPO_ERROR_VISUAL or t == TIPO_ERROR_VISUAL_A for t in tipos):      
+    if any(t == TIPO_ERROR_VISUAL or t == TIPO_ERROR_VISUAL_A  or t == TIPO_ERROR_LICENCIA for t in tipos):      
         return 'ERROR'
     if any(t.startswith('Obsoleto') for t in tipos):
         return 'OBSOLETO'
@@ -495,6 +499,22 @@ def aplicar_reglas_especiales(df_lm: pd.DataFrame, checkboxes: dict):
             agregar('General', f'Cantidad insuficiente de {REF_TAPITA_PB}',
                      f"Hay {actual} ud de {REF_TAPITA_PB}, se necesitan {total_necesario} "
                      f"(1 por cada ud de pb lum).")
+
+    # --- Licencias EN-2642: 1 unidad por cada unidad combinada de EN-0504 + EN-2001 ---
+    filas_base_licencia = _filas_con_pn(df_lm, REFS_LICENCIA_BASE)
+    total_necesario_licencia = sum((cantidad_int(q) or 0) for q in filas_base_licencia['Qty'])
+    if total_necesario_licencia > 0:
+        filas_2642 = _filas_con_pn(df_lm, [REF_LICENCIA_2642])
+        actual_2642 = sum((cantidad_int(q) or 0) for q in filas_2642['Qty'])
+        if filas_2642.empty:
+            agregar('General', f'Falta {REF_LICENCIA_2642} (licencia)',
+                     f"Hay {total_necesario_licencia} ud combinadas de EN-0504/EN-2001 en el LM. "
+                     f"Falta añadir {REF_LICENCIA_2642} x{total_necesario_licencia} ud.")
+        elif actual_2642 != total_necesario_licencia:
+            for idx, _fila in filas_2642.iterrows():
+                agregar(idx + 4, TIPO_ERROR_LICENCIA,
+                         f"Hay {actual_2642} ud de {REF_LICENCIA_2642} en total, deberían ser {total_necesario_licencia} "
+                         f"(1 por cada ud combinada de EN-0504/EN-2001).")
 
     # --- PCB / EN-1902 -> EN-2629 (CPU ETH) ---
     if not _filas_con_pn(df_lm, PCB_REQUIERE_CPU_ETH).empty:
